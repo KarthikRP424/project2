@@ -1,0 +1,15 @@
+// PostureGuard Android Companion App
+// build.gradle (Project level)
+
+buildscript {
+    ext {
+        compose_bom_version = "2024.02.00"
+        kotlin_version = "1.9.22"
+    }
+}
+
+plugins {
+    id 'com.android.application' version '8.2.2' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+    id 'org.jetbrains.kotlin.plugin.serialization' version '1.9.22' apply false
+}
