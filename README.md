@@ -1,6 +1,6 @@
 # Smart Bluetooth-Based AI Posture Correction System 🧘‍♂️💻
 
-A next-generation, cross-platform, privacy-focused IoT and Computer Vision system designed to monitor sitting posture in real time. It uses local MediaPipe Pose processing to analyze posture via a laptop webcam, or streams orientation metrics from a custom ESP32 BLE wearable or an Android companion app. It alerts users via audio warnings and haptic vibrations when slouching is detected, promoting habit-forming posture correction.
+A next-generation, cross-platform, privacy-focused IoT and Computer Vision system designed to monitor sitting posture in real time. It uses local MediaPipe Pose processing to analyze posture via a laptop webcam, featuring real-time absolute angle classification, system-wide always-on-top popup overlay warnings (visible even when minimized or working in other apps like VS Code or browser), audio alerts with a 10-second cooldown, and dashboard score tracking. It can also stream orientation metrics from a custom ESP32 BLE wearable or an Android companion app, alerting users via haptic vibrations and audio warnings.
 
 ---
 
@@ -38,21 +38,42 @@ project2/
 
 The desktop app acts as the central coordinator, hosting the local database, UI graphs, webcam Pose processing, and communication servers.
 
-#### Prerequisites
-- Python 3.9 - 3.11 (tested on standard environments)
-- Integrated or USB webcam
+#### Prerequisites & Requirements
+- **Python 3.11 (Required):** The project uses MediaPipe Pose tracking, which has known binding/solution loading issues on newer Python releases (such as Python 3.14+). Python 3.11 is required for compatibility.
+- Integrated or USB webcam.
 
-#### Setup
-1. Navigate to the desktop project folder:
-   ```bash
+#### Automated Setup (Recommended - Windows PowerShell)
+We provide an automated script to handle Python 3.11 detection, clean virtual environment creation, and dependency installation:
+1. Open PowerShell and navigate to the project directory:
+   ```powershell
    cd posture-laptop
    ```
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
+2. Run the setup script:
+   ```powershell
+   .\setup_windows.ps1
    ```
-3. Run the application:
-   ```bash
+
+#### Manual Setup (Windows PowerShell)
+If you prefer to configure the environment manually:
+1. Navigate to the desktop project folder:
+   ```powershell
+   cd posture-laptop
+   ```
+2. Create a virtual environment using Python 3.11:
+   ```powershell
+   & "C:\Users\DELL\AppData\Local\Programs\Python\Python311\python.exe" -m venv venv
+   ```
+3. Activate the virtual environment:
+   ```powershell
+   .\venv\Scripts\Activate.ps1
+   ```
+4. Upgrade pip and install the dependencies:
+   ```powershell
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
+   ```
+5. Run the application:
+   ```powershell
    python main.py
    ```
 

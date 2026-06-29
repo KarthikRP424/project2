@@ -24,21 +24,90 @@ from workers.sensor_worker import SensorWorker
 from core import database as db
 
 
+class SystemWarningPopup(QWidget):
+    """A floating, always-on-top, non-blocking toast warning popup."""
+    
+    def __init__(self, title: str, message: str, severity: str, parent=None):
+        super().__init__(parent, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        
+        # Style based on severity
+        bg_colors = {
+            "warning": "#1c1a05",
+            "bad": "#2e0505",
+            "dangerous": "#400404"
+        }
+        border_colors = {
+            "warning": "#f59e0b",
+            "bad": "#ef4444",
+            "dangerous": "#ff0000"
+        }
+        text_colors = {
+            "warning": "#f59e0b",
+            "bad": "#ef4444",
+            "dangerous": "#ff3333"
+        }
+        
+        bg = bg_colors.get(severity, "#161b22")
+        border = border_colors.get(severity, "#30363d")
+        text_col = text_colors.get(severity, "#e6edf3")
+        
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {bg};
+                border: 2px solid {border};
+                border-radius: 8px;
+            }}
+            QLabel {{
+                border: none;
+                background: transparent;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 12, 15, 12)
+        
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {text_col};")
+        
+        msg_lbl = QLabel(message)
+        msg_lbl.setStyleSheet("font-size: 12px; color: #e6edf3;")
+        msg_lbl.setWordWrap(True)
+        
+        layout.addWidget(title_lbl)
+        layout.addWidget(msg_lbl)
+        
+        self.setFixedSize(320, 90)
+        
+        # Position in top-right corner of primary screen
+        screen = QApplication.primaryScreen()
+        rect = screen.availableGeometry()
+        x = rect.width() - self.width() - 20
+        y = 50
+        self.move(x, y)
+        
+        # Auto close after 3 seconds
+        QTimer.singleShot(3000, self.close)
+
+
 class MainWindow(QMainWindow):
     """Top-level application window with sidebar and stacked content."""
 
     def __init__(self):
         super().__init__()
-        self._settings  = load_settings()
-        self._user_id   = db.create_or_get_user(self._settings.get("username", "default"))
-        self._session_id = 0
+        self._settings           = load_settings()
+        self._user_id            = db.create_or_get_user(self._settings.get("username", "default"))
+        self._session_id         = 0
         self._session_start_time = 0.0
-        self._slouch_count = 0
-        self._last_status = "NO_DETECTION"
-        self._threshold_sec = self._settings.get("alert_threshold", 10)
+        self._slouch_count       = 0
+        self._last_status        = "NO_DETECTION"
+        self._session_score      = 100.0
+        self._threshold_sec      = self._settings.get("alert_threshold", 10)
+        # Cached stats for periodic dashboard refresh (avoids per-frame updates)
+        self._cached_stats: dict = {}
 
-        self._cam_worker: CameraWorker = None
-        self._sensor_worker: SensorWorker = None
+        self._cam_worker: CameraWorker     = None
+        self._sensor_worker: SensorWorker  = None
 
         self.setWindowTitle("PostureGuard  –  Smart Posture Correction")
         self.setMinimumSize(1280, 780)
@@ -47,10 +116,15 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._start_sensor_worker()
 
-        # Live progress bar refresh (every 500ms)
+        # Live progress bar refresh (every 500 ms) — very cheap
         self._progress_timer = QTimer(self)
         self._progress_timer.timeout.connect(self._refresh_held_progress)
         self._progress_timer.start(500)
+
+        # Dashboard stats refresh (every 5 s during session) — avoids per-frame DB queries
+        self._dashboard_timer = QTimer(self)
+        self._dashboard_timer.timeout.connect(self._periodic_dashboard_refresh)
+        self._dashboard_timer.start(5000)
 
     # ── UI Construction ───────────────────────────────────────────────────────
 
@@ -163,6 +237,9 @@ class MainWindow(QMainWindow):
     def _switch_tab(self, index: int):
         self._stack.setCurrentIndex(index)
         self._set_active_nav(index)
+        # Refresh dashboard immediately when the user navigates to it
+        if index == 0:
+            self._dashboard.refresh()
 
     def _set_active_nav(self, active_idx: int):
         for i, btn in enumerate(self._nav_buttons):
@@ -191,14 +268,16 @@ class MainWindow(QMainWindow):
         if self._cam_worker and self._cam_worker.isRunning():
             return
         mode = "CAMERA"
-        self._session_id = db.start_session(self._user_id, mode)
+        self._session_id         = db.start_session(self._user_id, mode)
+        self._session_score      = 100.0
+        self._cached_stats       = {}
         self._session_start_time = time.time()
         self._slouch_count = 0
-
         self._cam_worker = CameraWorker(
             camera_index=self._settings.get("camera_index", 0),
             user_id=self._user_id,
             session_id=self._session_id,
+            dangerous_threshold=float(self._settings.get("dangerous_threshold", 25.0)),
         )
         self._cam_worker.set_threshold(self._threshold_sec)
 
@@ -208,6 +287,7 @@ class MainWindow(QMainWindow):
         self._cam_worker.alert_fired.connect(self._on_alert_fired)
         self._cam_worker.calibration_done.connect(self._on_calibration_done)
         self._cam_worker.error_occurred.connect(self._on_camera_error)
+        self._cam_worker.show_popup.connect(self.show_system_warning)
 
         # Load existing calibration if available
         cal = db.get_calibration(self._user_id, "CAMERA")
@@ -227,9 +307,7 @@ class MainWindow(QMainWindow):
             self._cam_worker.stop()
             self._cam_worker.wait(2000)
             elapsed = int(time.time() - self._session_start_time)
-            slouch_dur = int(self._cam_worker.alert_mgr.get_held_duration())
-            score = max(0, 100 - (slouch_dur / max(1, elapsed)) * 100)
-            db.end_session(self._session_id, score, elapsed)
+            db.end_session(self._session_id, self._session_score, elapsed)
             self._cam_worker = None
 
         self._session_lbl.setText("⚪  No Active Session")
@@ -250,37 +328,39 @@ class MainWindow(QMainWindow):
 
     # ── Status/alert handlers ─────────────────────────────────────────────────
 
-    @pyqtSlot(str, float, float)
-    def _on_status_update(self, status: str, angle: float, deviation: float):
-        self._last_status = status
-        self._monitor.update_status(status, angle, deviation)
+    @pyqtSlot(str, float, float, int, str)
+    def _on_status_update(self, status: str, angle: float, deviation: float, bad_count: int, alert_status: str):
+        # Deduct score on transition into dangerous (not every frame)
+        if status == "dangerous" and self._last_status != "dangerous":
+            self._session_score = max(0.0, self._session_score - 5.0)
 
-        if status == "BAD":
-            self._slouch_count += 1
+        self._last_status  = status
+        self._slouch_count = bad_count
 
+        # Update the Live Monitor panel labels (already throttled to 500 ms by the worker)
+        self._monitor.update_status(status, angle, deviation, bad_count, alert_status)
+
+        # Cache stats for the periodic dashboard refresh (do NOT call dashboard here)
         elapsed_min = int((time.time() - self._session_start_time) / 60) if self._session_start_time else 0
-        self._dashboard.update_stats({
-            "score": max(0, 100 - (deviation * 2)),
-            "elapsed_min": elapsed_min,
+        self._cached_stats = {
+            "score":        self._session_score,
+            "elapsed_min":  elapsed_min,
             "slouch_count": self._slouch_count,
-        })
+        }
 
     @pyqtSlot(str, float)
     def _on_alert_fired(self, status: str, held_sec: float):
-        msg = (
-            f"🚨 Bad posture detected for {int(held_sec)} seconds!\n"
-            "Please sit up straight and align your neck."
+        # Non-blocking status bar message only — never use QMessageBox here
+        # (a modal dialog blocks the entire event loop and freezes the camera)
+        self.statusBar().showMessage(
+            f"⚠️  Bad posture held for {int(held_sec)}s — please sit straight!", 8000
         )
-        self.statusBar().showMessage(f"⚠️ Alert: Bad posture held {int(held_sec)}s", 8000)
 
-        if self._settings.get("notification_style", "both") in ("popup", "both"):
-            box = QMessageBox(self)
-            box.setWindowTitle("PostureGuard Alert")
-            box.setText(msg)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setStandardButtons(QMessageBox.StandardButton.Ok)
-            box.setStyleSheet("QMessageBox { background: #161b22; } QLabel { color: #e6edf3; }")
-            box.show()
+    @pyqtSlot(str, str, str)
+    def show_system_warning(self, title: str, message: str, severity: str):
+        """Displays a custom frameless, always-on-top popup overlay."""
+        self._popup_win = SystemWarningPopup(title, message, severity)
+        self._popup_win.show()
 
         # Trigger Android vibration
         if self._sensor_worker and self._settings.get("alert_vibration", True):
@@ -298,6 +378,11 @@ class MainWindow(QMainWindow):
     def _on_camera_error(self, msg: str):
         QMessageBox.critical(self, "Camera Error", msg)
         self._on_stop_session()
+
+    def _periodic_dashboard_refresh(self):
+        """Called by QTimer every 5 s. Only updates if a session is active."""
+        if self._cam_worker and self._cam_worker.isRunning() and self._cached_stats:
+            self._dashboard.update_stats(self._cached_stats)
 
     def _refresh_held_progress(self):
         if self._cam_worker and self._cam_worker.isRunning():

@@ -104,15 +104,15 @@ class AlertManager:
 
     @staticmethod
     def _play_sound():
-        """Play a short system beep. Falls back gracefully on all platforms."""
-        try:
-            if sys.platform == "win32":
-                import winsound
-                winsound.Beep(880, 300)   # 880 Hz for 300 ms
-                time.sleep(0.1)
-                winsound.Beep(660, 200)
-            else:
-                # macOS / Linux: use print bell or afplay
-                print("\a", end="", flush=True)
-        except Exception:
-            pass
+        """Play a short system beep in a background thread (non-blocking)."""
+        import threading
+        def _beep():
+            try:
+                if sys.platform == "win32":
+                    import winsound
+                    winsound.Beep(880, 250)   # 880 Hz for 250 ms
+                else:
+                    print("\a", end="", flush=True)
+            except Exception:
+                pass
+        threading.Thread(target=_beep, daemon=True).start()

@@ -22,6 +22,7 @@ DEFAULT_SETTINGS = {
     "camera_index":     0,
     "sensitivity":      10,
     "notification_style": "both",
+    "dangerous_threshold": 25,
 }
 
 
@@ -97,6 +98,20 @@ class SettingsTab(QWidget):
         thresh_row.addWidget(self._thresh_val_lbl)
         root.addLayout(thresh_row)
 
+        dangerous_row = QHBoxLayout()
+        dangerous_row.addWidget(QLabel("Dangerous Angle Threshold (degrees):"))
+        self._dangerous_slider = QSlider(Qt.Orientation.Horizontal)
+        self._dangerous_slider.setRange(10, 45)
+        self._dangerous_slider.setValue(self._settings.get("dangerous_threshold", 25))
+        self._dangerous_val_lbl = QLabel(str(self._dangerous_slider.value()))
+        self._dangerous_val_lbl.setStyleSheet("color: #ef4444; font-weight: 700; min-width: 28px;")
+        self._dangerous_slider.valueChanged.connect(
+            lambda v: self._dangerous_val_lbl.setText(str(v))
+        )
+        dangerous_row.addWidget(self._dangerous_slider)
+        dangerous_row.addWidget(self._dangerous_val_lbl)
+        root.addLayout(dangerous_row)
+
         self._sound_cb = QCheckBox("Enable sound alert on laptop")
         self._sound_cb.setChecked(self._settings.get("alert_sound", True))
         self._sound_cb.setStyleSheet("color: #e6edf3;")
@@ -137,6 +152,7 @@ class SettingsTab(QWidget):
             "alert_vibration":    self._vibrate_cb.isChecked(),
             "camera_index":       self._cam_combo.currentData(),
             "notification_style": self._notif_combo.currentText(),
+            "dangerous_threshold": self._dangerous_slider.value(),
         })
         save_settings(self._settings)
         self._saved_lbl.setText("✓ Settings saved successfully")

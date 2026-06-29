@@ -1,0 +1,8 @@
+posture-laptop/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+posture-laptop/config/settings.json
+posture-laptop/config/*.db
+.env

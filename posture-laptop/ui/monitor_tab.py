@@ -18,7 +18,9 @@ MODES = ["Camera AI", "Android Sensor", "ESP32 Wearable"]
 STATUS_COLORS = {
     "GOOD":         ("#22c55e", "#052e16"),
     "SLIGHT":       ("#f59e0b", "#1c1a05"),
+    "warning":      ("#f97316", "#2c1103"),
     "BAD":          ("#ef4444", "#2e0505"),
+    "dangerous":    ("#ef4444", "#2e0505"),
     "NO_DETECTION": ("#8b949e", "#1a1f26"),
 }
 
@@ -104,6 +106,14 @@ class MonitorTab(QWidget):
         self._deviation_label.setStyleSheet("color: #8b949e; font-size: 12px;")
         self._deviation_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self._bad_count_label = QLabel("Bad Posture Count: 0")
+        self._bad_count_label.setStyleSheet("color: #8b949e; font-size: 13px; font-weight: bold;")
+        self._bad_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._alert_status_label = QLabel("Alert Status: Idle")
+        self._alert_status_label.setStyleSheet("color: #8b949e; font-size: 13px; font-weight: bold;")
+        self._alert_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self._held_bar = QProgressBar()
         self._held_bar.setRange(0, 100)
         self._held_bar.setValue(0)
@@ -116,6 +126,8 @@ class MonitorTab(QWidget):
 
         sg_layout.addWidget(self._angle_label)
         sg_layout.addWidget(self._deviation_label)
+        sg_layout.addWidget(self._bad_count_label)
+        sg_layout.addWidget(self._alert_status_label)
         sg_layout.addWidget(QLabel("Bad posture hold progress:"))
         sg_layout.addWidget(self._held_bar)
         stat_grp.setLayout(sg_layout)
@@ -181,13 +193,15 @@ class MonitorTab(QWidget):
         )
         self._feed_label.setPixmap(pix)
 
-    def update_status(self, status: str, angle: float, deviation: float):
-        """Refresh the status badge and angle labels."""
+    def update_status(self, status: str, angle: float, deviation: float, bad_count: int = 0, alert_status: str = "Idle"):
+        """Refresh the status badge, angle labels, bad posture count, and alert status."""
         fg, bg = STATUS_COLORS.get(status, ("#8b949e", "#1a1f26"))
         labels = {
             "GOOD":         "✅  GOOD POSTURE",
-            "SLIGHT":       "⚠️  SLIGHT SLOUCH",
+            "SLIGHT":       "⚠️  SLIGHT BEND",
+            "warning":      "⚠️  POSTURE WARNING",
             "BAD":          "🚨  BAD POSTURE",
+            "dangerous":    "🚨  DANGEROUS POSTURE",
             "NO_DETECTION": "🔍  NOT CALIBRATED",
         }
         self._status_badge.setText(labels.get(status, status))
@@ -197,6 +211,8 @@ class MonitorTab(QWidget):
         )
         self._angle_label.setText(f"Angle: {angle:.1f} °")
         self._deviation_label.setText(f"Deviation from reference: {deviation:.1f} °")
+        self._bad_count_label.setText(f"Bad Posture Count: {bad_count}")
+        self._alert_status_label.setText(f"Alert Status: {alert_status}")
 
         # Progress bar: held duration as % of threshold
         from core.alert_manager import AlertManager

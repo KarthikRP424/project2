@@ -12,10 +12,18 @@ import cv2
 from typing import Optional
 
 try:
-    import mediapipe as mp
+    # mediapipe >= 0.10.14 removed the mp.solutions top-level alias.
+    # We import the sub-modules directly, which works on all recent versions.
+    from mediapipe.python.solutions import pose as _mp_pose_module
+    from mediapipe.python.solutions import drawing_utils as _mp_draw_module
+    from mediapipe.python.solutions import drawing_styles as _mp_styles_module
     _MP_AVAILABLE = True
-except ImportError:
+except Exception as _mp_import_err:
+    print(f"[PostureGuard] MediaPipe import failed: {_mp_import_err}")
     _MP_AVAILABLE = False
+    _mp_pose_module = None
+    _mp_draw_module = None
+    _mp_styles_module = None
 
 
 # ── MediaPipe landmark indices ──────────────────────────────────────────────
@@ -29,13 +37,17 @@ _RIGHT_EYE      = 5
 # ── Posture status constants ─────────────────────────────────────────────────
 STATUS_GOOD   = "GOOD"
 STATUS_SLIGHT = "SLIGHT"
+STATUS_WARNING = "warning"
 STATUS_BAD    = "BAD"
 STATUS_NONE   = "NO_DETECTION"
+STATUS_DANGEROUS = "dangerous"
 
 # ── Color palette (BGR) ─────────────────────────────────────────────────────
 COLOR_GOOD   = (50, 220, 100)
 COLOR_SLIGHT = (30, 180, 255)
+COLOR_WARNING = (0, 140, 255)
 COLOR_BAD    = (50, 50, 240)
+COLOR_DANGEROUS = (0, 0, 255)
 COLOR_TEXT   = (230, 230, 230)
 
 
@@ -50,33 +62,42 @@ class PostureAnalyzer:
     """
 
     def __init__(self, ema_beta: float = 0.20, good_threshold: float = 10.0,
-                 bad_threshold: float = 20.0):
+                 bad_threshold: float = 20.0, dangerous_threshold: float = 25.0):
         """
         Args:
             ema_beta:        EMA smoothing factor (0–1). Lower = smoother, higher = more reactive.
             good_threshold:  Degrees within reference considered 'Good' posture.
             bad_threshold:   Degrees from reference that triggers 'Bad' status.
+            dangerous_threshold: Absolute angle (degrees) below which posture is dangerous.
         """
         self.ema_beta = ema_beta
         self.good_threshold = good_threshold
         self.bad_threshold = bad_threshold
+        self.dangerous_threshold = dangerous_threshold
 
         self._reference_angle: Optional[float] = None
         self._ema_angle: Optional[float] = None
         self._calibration_samples: list = []
 
         if _MP_AVAILABLE:
-            self._mp_pose = mp.solutions.pose
-            self._mp_draw = mp.solutions.drawing_utils
-            self._mp_styles = mp.solutions.drawing_styles
-            self._pose = self._mp_pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,
-                smooth_landmarks=True,
-                enable_segmentation=False,
-                min_detection_confidence=0.6,
-                min_tracking_confidence=0.6,
-            )
+            try:
+                self._mp_pose = _mp_pose_module
+                self._mp_draw = _mp_draw_module
+                self._mp_styles = _mp_styles_module
+                self._pose = self._mp_pose.Pose(
+                    static_image_mode=False,
+                    model_complexity=0,        # 0=lite (fast), 1=full, 2=heavy
+                    smooth_landmarks=True,
+                    enable_segmentation=False,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                print("[PostureGuard] MediaPipe Pose initialized successfully.")
+            except Exception as e:
+                import traceback
+                print(f"[PostureGuard] Error initializing MediaPipe Pose: {e}")
+                traceback.print_exc()
+                self._pose = None   # pose=None triggers NO_DETECTION path safely
         else:
             self._pose = None
 
@@ -155,19 +176,25 @@ class PostureAnalyzer:
         result["raw_angle"] = raw_angle
         result["angle"] = self._ema_angle
 
-        # Classify posture
+        # Classify posture based on absolute angle ranges
         deviation = 0.0
         status = STATUS_NONE
-        if self._reference_angle is not None:
-            deviation = abs(self._reference_angle - self._ema_angle)
-            if deviation <= self.good_threshold:
+        if self._ema_angle is not None:
+            if self._reference_angle is not None:
+                deviation = abs(self._reference_angle - self._ema_angle)
+            
+            if self._ema_angle >= 80.0:
                 status = STATUS_GOOD
-            elif deviation <= self.bad_threshold:
+            elif self._ema_angle >= 70.0:
                 status = STATUS_SLIGHT
-            else:
+            elif self._ema_angle >= 60.0:
+                status = STATUS_WARNING
+            elif self._ema_angle >= 25.0:
                 status = STATUS_BAD
+            else:
+                status = STATUS_DANGEROUS
         else:
-            status = STATUS_NONE  # Not yet calibrated
+            status = STATUS_NONE
 
         result["status"] = status
         result["deviation"] = deviation
@@ -221,22 +248,27 @@ class PostureAnalyzer:
         color_map = {
             STATUS_GOOD: COLOR_GOOD,
             STATUS_SLIGHT: COLOR_SLIGHT,
+            STATUS_WARNING: COLOR_WARNING,
             STATUS_BAD: COLOR_BAD,
+            STATUS_DANGEROUS: COLOR_DANGEROUS,
             STATUS_NONE: (150, 150, 150),
         }
         color = color_map.get(status, (150, 150, 150))
 
         label_map = {
             STATUS_GOOD: "GOOD POSTURE",
-            STATUS_SLIGHT: "SLIGHT SLOUCH",
-            STATUS_BAD: "BAD POSTURE!",
+            STATUS_SLIGHT: "SLIGHT BEND",
+            STATUS_WARNING: "POSTURE WARNING",
+            STATUS_BAD: "BAD POSTURE",
+            STATUS_DANGEROUS: "DANGEROUS POSTURE - SIT STRAIGHT",
             STATUS_NONE: "Calibrate First",
         }
         label = label_map.get(status, "")
 
-        # Background pill
-        cv2.rectangle(frame, (8, 8), (330, 80), (20, 20, 30), -1)
-        cv2.rectangle(frame, (8, 8), (330, 80), color, 2)
+        # Background pill (dynamic width for warnings/danger status)
+        rect_width = 540 if status in (STATUS_DANGEROUS, STATUS_WARNING) else 330
+        cv2.rectangle(frame, (8, 8), (rect_width, 80), (20, 20, 30), -1)
+        cv2.rectangle(frame, (8, 8), (rect_width, 80), color, 2)
 
         cv2.putText(frame, label, (18, 38), cv2.FONT_HERSHEY_SIMPLEX,
                     0.9, color, 2, cv2.LINE_AA)
